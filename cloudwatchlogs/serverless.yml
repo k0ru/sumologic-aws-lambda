@@ -1,0 +1,15 @@
+service: sumologic-collector # NOTE: update this with your service name
+
+provider:
+  name: aws
+  runtime: nodejs6.10
+
+functions:
+  sumo:
+    name: sumologic-${opt:stage}-collector
+    handler: cloudwatchlogs_lambda.handler
+    environment:
+      env: ${opt:stage}
+      ENCODING: "UTF-8"
+      SUMO_ENDPOINT: ${env:SUMO_ENDPOINT}
+

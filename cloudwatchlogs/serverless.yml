@@ -3,6 +3,8 @@ service: sumologic-collector # NOTE: update this with your service name
 provider:
   name: aws
   runtime: nodejs6.10
+  deploymentBucket:
+    name: koru-deployments-us-east-1
 
 functions:
   sumo:

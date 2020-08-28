@@ -1,5 +1,5 @@
 //////////////////////////////////////////////////////////////////////////////////
-//                       CloudWatch Logs to SumoLogic                           //
+// CloudWatch Logs to SumoLogic //
 // https://github.com/SumoLogic/sumologic-aws-lambda/tree/master/cloudwatchlogs //
 //////////////////////////////////////////////////////////////////////////////////
 
@@ -8,20 +8,23 @@ var SumoURL = process.env.SUMO_ENDPOINT;
 
 // The following parameters override the sourceCategoryOverride, sourceHostOverride and sourceNameOverride metadata fields within SumoLogic.
 // Not these can also be overridden via json within the message payload. See the README for more information.
-var sourceCategoryOverride = process.env.SOURCE_CATEGORY_OVERRIDE || 'none';  // If none sourceCategoryOverride will not be overridden
-var sourceHostOverride = process.env.SOURCE_HOST_OVERRIDE || 'none';          // If none sourceHostOverride will not be set to the name of the logGroup
-var sourceNameOverride = process.env.SOURCE_NAME_OVERRIDE || 'none';          // If none sourceNameOverride will not be set to the name of the logStream
+var sourceCategoryOverride = process.env.SOURCE_CATEGORY_OVERRIDE || 'none'; // If none sourceCategoryOverride will not be overridden
+var sourceHostOverride = process.env.SOURCE_HOST_OVERRIDE || 'none'; // If none sourceHostOverride will not be set to the name of the logGroup
+var sourceNameOverride = process.env.SOURCE_NAME_OVERRIDE || 'none'; // If none sourceNameOverride will not be set to the name of the logStream
+
+var retryInterval = process.env.RETRY_INTERVAL || 5000; // the interval in millisecs between retries
+var numOfRetries = process.env.NUMBER_OF_RETRIES || 3; // the number of retries
 
 // CloudWatch logs encoding
-var encoding = process.env.ENCODING || 'utf-8';  // default is utf-8
+var encoding = process.env.ENCODING || 'utf-8'; // default is utf-8
 
 // Include logStream and logGroup as json fields within the message. Required for SumoLogic AWS Lambda App
-var includeLogInfo = true;  // default is true
+var includeLogInfo = true; // default is true
 
 // Regex used to detect logs coming from lambda functions.
 // The regex will parse out the requestID and strip the timestamp
-// Example: 2016-11-10T23:11:54.523Z	108af3bb-a79b-11e6-8bd7-91c363cc05d9    some message
-var consoleFormatRegex = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}.\d{3}Z\t(\w+?-\w+?-\w+?-\w+?-\w+)\t/;
+// Example: 2016-11-10T23:11:54.523Z 108af3bb-a79b-11e6-8bd7-91c363cc05d9 some message
+var consoleFormatRegex = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}.\d{3}Z\s(\w+?-\w+?-\w+?-\w+?-\w+)\s(INFO|ERROR|WARN|DEBUG)?/;
 
 // Used to extract RequestID
 var requestIdRegex = /(?:RequestId:|Z)\s+([\w\d\-]+)/;
@@ -30,8 +33,30 @@ var https = require('https');
 var zlib = require('zlib');
 var url = require('url');
 
+Promise.retryMax = function(fn,retry,interval,fnParams) {
+    return fn.apply(this,fnParams).catch( err => {
+        var waitTime = typeof interval === 'function' ? interval() : interval;
+        console.log("Retries left " + (retry-1) + " delay(in ms) " + waitTime);
+        return (retry>1? Promise.wait(waitTime).then(()=> Promise.retryMax(fn,retry-1,interval, fnParams)):Promise.reject(err));
+    });
+}
 
-function sumoMetaKey(awslogsData, message) {
+Promise.wait = function(delay) {
+    return new Promise((fulfill,reject)=> {
+        //console.log(Date.now());
+        setTimeout(fulfill,delay||0);
+    });
+};
+
+function exponentialBackoff(seed) {
+    var count = 0;
+    return function() {
+        count++;
+        return count*seed;
+    }
+}
+
+function sumoMetaKey(awslogsData, message, data) {
     var sourceCategory = '';
     var sourceName = '';
     var sourceHost = '';
@@ -80,7 +105,8 @@ function postToSumo(context, messages) {
     var options = {
         'hostname': urlObject.hostname,
         'path': urlObject.pathname,
-        'method': 'POST'
+        'method': 'POST',
+        'port': urlObject.port
     };
 
     var finalizeContext = function () {
@@ -95,41 +121,51 @@ function postToSumo(context, messages) {
         }
     };
 
-
+    function httpSend(options, headers, data) {
+        return new Promise( (resolve,reject) => {
+            var curOptions = options;
+            curOptions.headers = headers;
+            var req = https.request(curOptions, function (res) {
+                var body = '';
+                res.setEncoding('utf8');
+                res.on('data', function (chunk) {
+                    body += chunk; // don't really do anything with body
+                });
+                res.on('end', function () {
+                    if (res.statusCode == 200) {
+                        resolve(body);
+                    } else {
+                        reject({'error':'HTTP Return code ' + res.statusCode,'res':res});
+                    }
+                });
+            });
+            req.on('error', function (e) {
+                reject({'error':e,'res':null});
+            });
+            for (var i = 0; i < data.length; i++) {
+                req.write(JSON.stringify(data[i]) + '\n');
+            }
+            console.log("sending to Sumo...")
+            req.end();
+        });
+    }
     Object.keys(messages).forEach(function (key, index) {
         var headerArray = key.split(':');
-
-        options.headers = {
+        var headers = {
             'X-Sumo-Name': headerArray[0],
             'X-Sumo-Category': headerArray[1],
-            'X-Sumo-Host': headerArray[2]
+            'X-Sumo-Host': headerArray[2],
+            'X-Sumo-Client': 'kinesis-aws-lambda'
         };
-
-        var req = https.request(options, function (res) {
-            res.setEncoding('utf8');
-            res.on('data', function (chunk) {});
-            res.on('end', function () {
-                if (res.statusCode == 200) {
-                    messagesSent++;
-                } else {
-                    messageErrors.push('HTTP Return code ' + res.statusCode);
-                }
-                finalizeContext();
-            });
-        });
-
-        req.on('error', function (e) {
-            messageErrors.push(e.message);
+        Promise.retryMax(httpSend, numOfRetries, retryInterval, [options, headers, messages[key]]).then((body)=> {
+            messagesSent++;
+            finalizeContext()
+        }).catch((e) => {
+            messageErrors.push(e.error);
             finalizeContext();
         });
-
-        for (var i = 0; i < messages[key].length; i++) {
-            req.write(JSON.stringify(messages[key][i]) + '\n');
-        }
-        req.end();
     });
 }
-
 
 exports.handler = function (event, context) {
 
@@ -143,77 +179,77 @@ exports.handler = function (event, context) {
     if (urlObject.protocol != 'https:' || urlObject.host === null || urlObject.path === null) {
         context.fail('Invalid SUMO_ENDPOINT environment variable: ' + SumoURL);
     }
+    var numOfRecords = event.Records.length;
+    event.Records.forEach(function(record, index) {
+        var awslogsData = {};
 
-    event.Records.forEach(function(record) {
-        var zippedInput = new Buffer(record.kinesis.data, 'base64');
+        try {
+            awslogsData = JSON.parse(zlib.gunzipSync(Buffer.from(record.kinesis.data, 'base64')).toString(encoding));
+        } catch (e) {
+            context.fail(e);
+        }
 
-        zlib.gunzip(zippedInput, function (e, buffer) {
-            if (e) {
-                context.fail(e);
+        if (awslogsData.messageType === 'CONTROL_MESSAGE') {
+            console.log('Control message');
+            context.succeed('Success');
+        }
+
+        var lastRequestID = null;
+
+        console.log('Log events: ' + awslogsData.logEvents.length);
+
+        // Chunk log events before posting to SumoLogic
+        awslogsData.logEvents.forEach(function (log, idx, arr) {
+
+            // Remove any trailing \n
+            log.message = log.message.replace(/\n$/, '');
+
+            // Try extract requestID
+            var requestId = requestIdRegex.exec(log.message);
+            if (requestId !== null) {
+                lastRequestID = requestId[1];
             }
 
-            var awslogsData = JSON.parse(buffer.toString(encoding));
-
-            if (awslogsData.messageType === 'CONTROL_MESSAGE') {
-                console.log('Control message');
-                context.succeed('Success');
+            // Attempt to detect console log and auto extract requestID and message
+            var consoleLog = consoleFormatRegex.exec(log.message);
+            if (consoleLog !== null) {
+                lastRequestID = consoleLog[1];
+                log.message = log.message.substring(consoleLog[0].length);
             }
 
-            var lastRequestID = null;
+            // Auto detect if message is json
+            try {
+                log.message = JSON.parse(log.message);
+            } catch (err) {
+                // Do nothing, leave as text
+                log.message.trim();
+            }
 
-            console.log('Log events: ' + awslogsData.logEvents.length);
+            // delete id as it's not very useful
+            delete log.id;
 
-            // Chunk log events before posting to SumoLogic
-            awslogsData.logEvents.forEach(function (log, idx, arr) {
+            if (includeLogInfo) {
+                log.logStream = awslogsData.logStream;
+                log.logGroup = awslogsData.logGroup;
+            }
 
-                // Remove any trailing \n
-                log.message = log.message.replace(/\n$/, '');
+            if (lastRequestID) {
+                log.requestID = lastRequestID;
+            }
 
-                // Try extract requestID
-                var requestId = requestIdRegex.exec(log.message);
-                if (requestId !== null) {
-                    lastRequestID = requestId[1];
-                }
+            var metadataKey = sumoMetaKey(awslogsData, log.message);
 
-                // Attempt to detect console log and auto extract requestID and message
-                var consoleLog = consoleFormatRegex.exec(log.message);
-                if (consoleLog !== null) {
-                    lastRequestID = consoleLog[1];
-                    log.message = log.message.substring(consoleLog[0].length);
-                }
-
-                // Auto detect if message is json
-                try {
-                    log.message = JSON.parse(log.message);
-                } catch (err) {
-                    // Do nothing, leave as text
-                    log.message.trim();
-                }
-
-                // delete id as it's not very useful
-                delete log.id;
-
-                if (includeLogInfo) {
-                    log.logStream = awslogsData.logStream;
-                    log.logGroup = awslogsData.logGroup;
-                }
-
-                if (lastRequestID) {
-                    log.requestID = lastRequestID;
-                }
-
-                var metadataKey = sumoMetaKey(awslogsData, log.message);
-
-                if (metadataKey in messageList) {
-                    messageList[metadataKey].push(log);
-                } else {
-                    messageList[metadataKey] = [log];
-                }
-            });
-
-            // Push messages to Sumo
+            if (metadataKey in messageList) {
+                messageList[metadataKey].push(log);
+            } else {
+                messageList[metadataKey] = [log];
+            }
+        });
+        // Push messages to Sumo
+        if (index === numOfRecords-1) {
             postToSumo(context, messageList);
-        })
+        }
 
     });
 };
+

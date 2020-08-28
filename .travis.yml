@@ -1,0 +1,23 @@
+sudo: required
+dist: trusty
+language: node_js
+python:
+- '2.7'
+jobs:
+  include:
+  - stage: Node 10
+    node_js: '10.17'
+    env: FUNCTION_DIR=cloudwatchlogs-with-dlq TEST_DIR=cloudwatchlogs-with-dlq TEST_FILE=test_cwl_lambda.py NODE_VERSION="10.x"
+  - stage: Node 10
+    node_js: '10.17'
+    env: FUNCTION_DIR=loggroup-lambda-connector TEST_DIR=loggroup-lambda-connector/test TEST_FILE=test_loggroup_lambda_connector.py NODE_VERSION="10.x"
+before_install:
+- sudo apt-get install python-pip
+- cd $TEST_DIR && sudo pip install -r requirements.txt && cd -
+script:
+- cd $FUNCTION_DIR && npm run build && cd -
+- cd $TEST_DIR && python $TEST_FILE && cd -
+env:
+  global:
+  - secure: iGATK/X1PfH8FCJlUpBbJ//mQ57QBQT0jETyDDH2r+GxZxXPnFS46ugPGsWTX0IDDEGjXE+/P6wnm0ORo7aa3yp7DZnfWFDyrgFchgUo1p3unt5sQcHg/9mitkQF7lHFlnAqM1D69AEGP5WU63m/9xQoj0BVYCVb2eUEqatV1AU8lpvRAkFc2juumy1ba4skoDFLOtrsaO2k+SCCBfMKq2SOJkcPnfMZGTOT7niaNnNAZSDYDovAlMYaLDOR10EMUAyklnmmAADyDxNRwSSAG8JKJMmfxSqIe4+s7xjqztjtkApWmEAjevDLpc62v1TWe0O2zCxnb4E4EBN6A31R1XJha4i/IKSeVL99J9X8aV1wIb9feV85qmZmlxVL2EU7/CcFGTdKeAak3qQWHZ1C6X32TBB6x5C0qASSC/x5pwDDJIOyeZr0Z93+dDhnBLNmzz8sA3h7AyzQZfhTqG/f4/SOgxTf7aF13X8BKuoM8BaGfXjy0keaVb0xbTjtDvi9F21EymWPdwNlQHsKca+EcTT2KE3mwFNrHAsTeNhGzMbrzmbZzvNHlmIwjB1C5l9h4GpUkxNb/mqi9SBTx9YfDIgz0bDOds1T92tGIAcBaHfJLTjc2JIgxwgdL13X3cL8GJBiFFwiJqiKJCSz4SxhWqsrrbsGSQBUqN5UoSsyKco=
+  - secure: pmgNH6sLnwPadB/m4e/DtV/NbblVCa84N56Q45vpDkdP7fSIt8YShkvElrxFNJBWXaPyG/uE2gnIrXREtN/7xox+xv2ej+Gsv+cLYwBIIs1oGgHVlm/JG4OBLhuSn23w/DK/RuuHWWjDJ2DsDaXlXgbPTU01EJC2kpM9YnsmeifDnq/HSNPVx8k6bBKhzED7atf8v8yy8XYAkpL3viNwm3B98xU/AvEcgrNwG0XYQexCBTm9nJTQ2q3sBFQfuvQXFNuQoQWuN0wmSlhFuAnGsm0nugk7YJ8HZTsw1X1OUW61J3c9p0BHKL69nWHoYvSkyzl/9kls3QxYhLumF2DepBSbw/+iKMkxNzd4s7DDKGMqM7Y/9omxj3djrGxn8qGpn7GKNyZJR5EqLS+KY9E7xQ6ql1COdUA1W6aTEzLeEelti4abHEoA7a5sEhRSC/rmR0v+PP3sKc2FJjDOB9/eBVG/8V05EgN3Ji7KEu5vsrvIzu1Ng4a7BUyM06gw1vF92H/uOOBGGh25H8LLIZTpB9z//brZ9RtrzSA585KyJPFFW8JdMl34CE+nz8DhGwXSCDBQz/HMh0h1RJ0+8nJkIuxi96yOPH73c1tngUTnhm7OZh7yyNCr1RLT7yS552stnR0WqSv8gSxWK1+Apmzi6P5s5oqraDhEW9CeQe/qkzI=

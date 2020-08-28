@@ -1,0 +1,38 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: 'This function is invoked by AWS CloudWatch events in response to state
+  change in your AWS resources which matches a event target definition. The event
+  payload received is then forwarded to Sumo Logic HTTP source endpoint.
+
+  '
+Globals:
+  Function:
+    Timeout: 300
+Parameters:
+  SumoEndpointUrl:
+    Type: String
+Resources:
+  CloudWatchEventFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: s3://appdevstore/GuardDuty/v1.0.2/0d13904d1fbd69ecd879992058f1aa41
+      Handler: cloudwatchevents.handler
+      Runtime: nodejs10.x
+      Environment:
+        Variables:
+          SUMO_ENDPOINT:
+            Ref: SumoEndpointUrl
+      Events:
+        CloudWatchEventTrigger:
+          Type: CloudWatchEvent
+          Properties:
+            Pattern:
+              source:
+              - aws.guardduty
+Outputs:
+  CloudWatchEventFunction:
+    Description: CloudWatchEvent Processor Function ARN
+    Value:
+      Fn::GetAtt:
+      - CloudWatchEventFunction
+      - Arn
